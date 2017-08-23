@@ -74,11 +74,24 @@ class SelectorBIC(ModelSelector):
 
         :return: GaussianHMM object
         """
-        warnings.filterwarnings("ignore", category=DeprecationWarning)
-
-        # TODO implement model selection based on BIC scores
-        raise NotImplementedError
-
+        best_bic = float('Inf')
+        best_model = None
+        
+        for num_components in range(self.min_n_components, self.max_n_components+1):
+            try:
+                current_model = self.base_model(num_components)
+                logL = current_model.score(self.X, self.lengths)
+                # number of parameters according to https://discussions.udacity.com/t/number-of-parameters-bic-calculation/233235/15
+                bic = -2 * logL + (num_components ** 2 + 2 * num_components * current_model.n_features - 1 ) * np.log(len(self.sequences))
+                if bic < best_bic:
+                    best_bic = bic
+                    best_model = current_model
+            except:
+                # copied from the function above (base_model)
+                if self.verbose:
+                    print("failure on {} with {} states, continuing".format(self.this_word, num_components))
+                pass
+        return best_model
 
 class SelectorDIC(ModelSelector):
     ''' select best model based on Discriminative Information Criterion
@@ -90,19 +103,79 @@ class SelectorDIC(ModelSelector):
     '''
 
     def select(self):
-        warnings.filterwarnings("ignore", category=DeprecationWarning)
+        best_dic = float('-Inf') # smallest dic possible
+        best_model = None
 
-        # TODO implement model selection based on DIC scores
-        raise NotImplementedError
+        other_words = [value for key, value in self.hwords.items() if key != self.this_word]
+        for num_components in range(self.min_n_components, self.max_n_components+1):
+            try:
+                current_model = self.base_model(num_components)
+                Xi_logL = current_model.score(self.X, self.lengths)
+                sum_other_Xi_logL = float(0)
+                # we score every other class, calculating antievidences
+                for word in other_words:
+                    sum_other_Xi_logL +=  current_model.score(word[0], word[1])
+                dic = Xi_logL - (1/len(other_words))*sum_other_Xi_logL
+                # according to the paper, if the model presents a greater criterion value, it's a better model 
+                if dic > best_dic:
+                    best_dic = dic
+                    best_model = current_model
+            except:
+                # copied from the function above (base_model)
+                if self.verbose:
+                    print("failure on {} with {} states, continuing".format(self.this_word, num_components))
+                continue
+        return best_model
 
 
 class SelectorCV(ModelSelector):
     ''' select best model based on average log Likelihood of cross-validation folds
 
     '''
-
+    
+    
     def select(self):
-        warnings.filterwarnings("ignore", category=DeprecationWarning)
+        best_logLavg = float('-Inf')
+        best_model = None
+        best_num_components = None
 
-        # TODO implement model selection using CV
-        raise NotImplementedError
+        def cv_loop(num_components):
+            logLs = []
+            split_method = KFold(n_splits=min(3,len(self.sequences))) # I thought I needed to do something like this (as it was failing for FISH) but I confirmed it using the forums: https://discussions.udacity.com/t/selectorcv-fails-to-train-fish/338796
+            for cv_train_idx, cv_test_idx in split_method.split(self.sequences):
+                try:
+                    X_train, lengths_train = combine_sequences(cv_train_idx, self.sequences)
+                    X_test, lengths_test = combine_sequences(cv_test_idx, self.sequences)
+                    current_model = GaussianHMM(n_components=num_components, covariance_type="diag", n_iter=1000,
+                                        random_state=self.random_state, verbose=False).fit(X_train, lengths_train)
+                    logLs.append(current_model.score(X_test, lengths_test))
+                except:
+                    # copied from the function above (base_model)
+                    if self.verbose:
+                        print("failure on {} with {} states, continuing".format(self.this_word, num_components))
+                    continue
+            if len(logLs) > 0:
+                return (sum(logLs)/len(logLs))
+            else:
+                return float('-Inf')
+
+        for num_components in range(self.min_n_components, self.max_n_components+1):
+            if len(self.sequences) > 1:
+                # just in case CV is possible (>1 sequences)
+                logLavg = cv_loop(num_components)
+            else:
+                logLavg = float('-Inf')
+                try:
+                    current_model = self.base_model(num_components)
+                    logLavg = current_model.score(self.X, self.lengths)
+                except:
+                    pass
+
+            if logLavg > best_logLavg:
+                best_logLavg = logLavg
+                best_num_components = num_components
+
+        if best_num_components is not None:
+            best_model = self.base_model(best_num_components)
+
+        return best_model
