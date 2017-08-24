@@ -74,15 +74,17 @@ class SelectorBIC(ModelSelector):
 
         :return: GaussianHMM object
         """
-        best_bic = float('Inf')
-        best_model = None
-        
+        best_bic = float('Inf') # to start the selector
+        best_model = None # just in case we don't find any
+        # for each num_component to test
         for num_components in range(self.min_n_components, self.max_n_components+1):
             try:
+                # we train the model and get its log-likelihood
                 current_model = self.base_model(num_components)
                 logL = current_model.score(self.X, self.lengths)
                 # number of parameters according to https://discussions.udacity.com/t/number-of-parameters-bic-calculation/233235/15
                 bic = -2 * logL + (num_components ** 2 + 2 * num_components * current_model.n_features - 1 ) * np.log(len(self.sequences))
+                # shall it be better than the best_bic yet, it becomes the best_bic and we select this model as the best_model
                 if bic < best_bic:
                     best_bic = bic
                     best_model = current_model
@@ -91,6 +93,7 @@ class SelectorBIC(ModelSelector):
                 if self.verbose:
                     print("failure on {} with {} states, continuing".format(self.this_word, num_components))
                 pass
+        # we return the best_model
         return best_model
 
 class SelectorDIC(ModelSelector):
@@ -103,20 +106,22 @@ class SelectorDIC(ModelSelector):
     '''
 
     def select(self):
-        best_dic = float('-Inf') # smallest dic possible
-        best_model = None
+        best_dic = float('-Inf') # to start the selector
+        best_model = None # just in case we find no model
 
-        other_words = [value for key, value in self.hwords.items() if key != self.this_word]
+        other_words = [value for key, value in self.hwords.items() if key != self.this_word] # 
         for num_components in range(self.min_n_components, self.max_n_components+1):
             try:
+                # we train for the current word and we get the logL
                 current_model = self.base_model(num_components)
                 Xi_logL = current_model.score(self.X, self.lengths)
                 sum_other_Xi_logL = float(0)
-                # we score every other class, calculating antievidences
+                # we score every other class, calculating logL for competing words
                 for word in other_words:
                     sum_other_Xi_logL +=  current_model.score(word[0], word[1])
                 dic = Xi_logL - (1/len(other_words))*sum_other_Xi_logL
                 # according to the paper, if the model presents a greater criterion value, it's a better model 
+                # shall it be better than the best_dic yet, it becomes the best_dic and we select this model as the best_model
                 if dic > best_dic:
                     best_dic = dic
                     best_model = current_model
@@ -125,6 +130,7 @@ class SelectorDIC(ModelSelector):
                 if self.verbose:
                     print("failure on {} with {} states, continuing".format(self.this_word, num_components))
                 continue
+        # we return the best_model
         return best_model
 
 
@@ -135,25 +141,32 @@ class SelectorCV(ModelSelector):
     
     
     def select(self):
-        best_logLavg = float('-Inf')
-        best_model = None
-        best_num_components = None
+        best_logLavg = float('-Inf') # to start the selector
+        best_model = None # just in case we don't find a model
+        best_num_components = None # just in case we don't find a model
 
         def cv_loop(num_components):
+            """ CV loop helper function """
             logLs = []
-            split_method = KFold(n_splits=min(3,len(self.sequences))) # I thought I needed to do something like this (as it was failing for FISH) but I confirmed it using the forums: https://discussions.udacity.com/t/selectorcv-fails-to-train-fish/338796
+            # I thought I needed to do something like this (as it was failing for FISH) but I confirmed it using the forums: https://discussions.udacity.com/t/selectorcv-fails-to-train-fish/338796
+            split_method = KFold(n_splits=min(3,len(self.sequences))) 
+            # for each fold
             for cv_train_idx, cv_test_idx in split_method.split(self.sequences):
                 try:
+                    # we get X and lengths for both train and test set
                     X_train, lengths_train = combine_sequences(cv_train_idx, self.sequences)
                     X_test, lengths_test = combine_sequences(cv_test_idx, self.sequences)
+                    # we train the model
                     current_model = GaussianHMM(n_components=num_components, covariance_type="diag", n_iter=1000,
                                         random_state=self.random_state, verbose=False).fit(X_train, lengths_train)
+                    # and we append the logL to our list
                     logLs.append(current_model.score(X_test, lengths_test))
                 except:
                     # copied from the function above (base_model)
                     if self.verbose:
                         print("failure on {} with {} states, continuing".format(self.this_word, num_components))
                     continue
+            # if we found at least one logL we return the average
             if len(logLs) > 0:
                 return (sum(logLs)/len(logLs))
             else:
@@ -161,9 +174,10 @@ class SelectorCV(ModelSelector):
 
         for num_components in range(self.min_n_components, self.max_n_components+1):
             if len(self.sequences) > 1:
-                # just in case CV is possible (>1 sequences)
+                # in case CV is possible (>1 sequences) we do the cv loop
                 logLavg = cv_loop(num_components)
             else:
+                # if <1 sequences, we train using all the data (no cv possible)
                 logLavg = float('-Inf')
                 try:
                     current_model = self.base_model(num_components)
@@ -171,10 +185,13 @@ class SelectorCV(ModelSelector):
                 except:
                     pass
 
+            # we compare the current logLavg with the best one yet, if it's better, we assign it as the best logLavg and set
+            # the number of components as the best yet
             if logLavg > best_logLavg:
                 best_logLavg = logLavg
                 best_num_components = num_components
 
+        # if we found the best number of components, we create a new model
         if best_num_components is not None:
             best_model = self.base_model(best_num_components)
 
